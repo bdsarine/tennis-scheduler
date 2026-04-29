@@ -185,7 +185,9 @@ def send_email(results: dict):
     msg.attach(MIMEText(html, "html"))
 
     try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.ehlo()
+            server.starttls()
             server.login(gmail, app_password)
             server.sendmail(gmail, gmail, msg.as_string())
         log("Email sent.")
