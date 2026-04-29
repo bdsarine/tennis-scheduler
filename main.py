@@ -1,28 +1,14 @@
 """
-NYC Parks Tennis Court Reservation Scraper
-==========================================
-Uses requests + BeautifulSoup — no browser required.
-Lightweight enough to run on any cloud server.
-
-SETUP:
-    pip3 install requests beautifulsoup4
-
-USAGE:
-    python3 tennis_scraper.py                          # scan next 7 days, all courts
-    python3 tennis_scraper.py --days 3                 # scan next 3 days
-    python3 tennis_scraper.py --park "Riverside"       # filter by park name
-    python3 tennis_scraper.py --email                  # email when slots found
-    python3 tennis_scraper.py --watch --email          # check every 60s for weekend morning slots
-    python3 tennis_scraper.py --loop 10 --email        # check every 10 min
+NYC Parks Tennis Court Scheduler
+=================================
+Runs once, emails full availability, then exits.
+Deployed on Railway as a cron job at 8am and 5pm ET.
 """
 
 import requests
-import argparse
 import json
 import sys
 import os
-import time
-import re
 from datetime import date, datetime, timedelta
 from bs4 import BeautifulSoup
 
@@ -34,17 +20,10 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-# ── Watch mode config ─────────────────────────────────────────────────────────
-WATCH_COURTS = ["Riverside Park", "Sutton East", "Alley Pond"]
-WATCH_HOURS  = [8, 9, 10, 11]  # 8am-12pm
-# ─────────────────────────────────────────────────────────────────────────────
-
 
 def log(msg: str):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
-
-# ── Fetching ──────────────────────────────────────────────────────────────────
 
 def fetch(url: str):
     try:
@@ -56,9 +35,7 @@ def fetch(url: str):
         return None
 
 
-# ── Court discovery ───────────────────────────────────────────────────────────
-
-def find_all_courts(park_filter=None):
+def find_all_courts():
     soup = fetch(MAIN_URL)
     if not soup:
         return [], []
@@ -72,14 +49,12 @@ def find_all_courts(park_filter=None):
             continue
 
         first = cells[0]
-        # Get full cell text then strip the booking link text
         full_text = first.get_text(" ").strip()
         for strip_str in ["View Availability/Reserve", "View Availability", "Reserve"]:
             full_text = full_text.replace(strip_str, "")
         name = full_text.strip().rstrip(",").strip()
+
         if not name or len(name) <= 5 or name.lower().startswith("location"):
-            continue
-        if park_filter and park_filter.lower() not in name.lower():
             continue
 
         link = first.find("a", string=lambda t: t and (
@@ -95,8 +70,6 @@ def find_all_courts(park_filter=None):
 
     return open_courts, closed_courts
 
-
-# ── Slot extraction ───────────────────────────────────────────────────────────
 
 def scrape_court(court: dict, days: int) -> list:
     soup = fetch(court["url"])
@@ -142,65 +115,22 @@ def scrape_court(court: dict, days: int) -> list:
     return slots
 
 
-# ── Full scan ─────────────────────────────────────────────────────────────────
-
-def scrape_all(days: int = 7, park_filter=None) -> dict:
-    open_courts, closed_courts = find_all_courts(park_filter)
-
-    if closed_courts:
-        log(f"Watching {len(closed_courts)} closed court(s) -- will activate when they reopen:")
-        for c in closed_courts:
-            log(f"  [CLOSED]  {c}")
-
-    if not open_courts:
-        log("No courts currently accepting reservations.")
-        return {}
-
-    log(f"{len(open_courts)} court(s) open for booking:")
-    for c in open_courts:
-        log(f"  [OPEN]  {c['name']}")
-
-    results = {}
-    for court in open_courts:
-        log(f"Checking {court['name']} ...")
-        results[court["name"]] = scrape_court(court, days)
-
-    return results
-
-
-# ── Output formatting ─────────────────────────────────────────────────────────
-
-def _dedup(results: dict) -> dict:
-    seen = set()
-    deduped = {}
-    for court_name, slots in results.items():
-        clean = []
-        for s in slots:
-            key = (court_name, s.get("court_num",""), s.get("date",""), s.get("time",""))
-            if key not in seen:
-                seen.add(key)
-                clean.append(s)
-        deduped[court_name] = clean
-    return deduped
-
-
-def _format_results(results: dict) -> str:
-    deduped = _dedup(results)
-    all_slots = [s for slots in deduped.values() for s in slots]
+def format_results(results: dict) -> str:
+    all_slots = [s for slots in results.values() for s in slots]
     if not all_slots:
         return "No open slots found."
 
     today_str = date.today().strftime("%a %b %d, %Y").replace(" 0", " ")
     lines = [f"NYC Tennis Court Availability -- {today_str}", ""]
 
-    for court_name, slots in sorted(deduped.items()):
+    for court_name, slots in sorted(results.items()):
         lines.append(court_name)
         if not slots:
             lines.append("  Fully booked")
         else:
             by_date = {}
             for s in slots:
-                by_date.setdefault(s.get("date","?"), []).append(s)
+                by_date.setdefault(s.get("date", "?"), []).append(s)
             for date_str, day_slots in sorted(by_date.items()):
                 try:
                     friendly = datetime.strptime(date_str, "%Y-%m-%d").strftime("%a %b %d").replace(" 0", " ")
@@ -209,8 +139,8 @@ def _format_results(results: dict) -> str:
                 lines.append(f"  {friendly} -- {len(day_slots)} slot(s)")
                 by_court = {}
                 for s in day_slots:
-                    by_court.setdefault(s.get("court_num",""), []).append(
-                        s.get("time","?").replace(":00 ","").replace("a.m.","am").replace("p.m.","pm")
+                    by_court.setdefault(s.get("court_num", ""), []).append(
+                        s.get("time", "?").replace(":00 ", "").replace("a.m.", "am").replace("p.m.", "pm")
                     )
                 for court_num, times in sorted(by_court.items()):
                     lines.append(f"    {court_num}:  {',  '.join(times)}")
@@ -219,128 +149,62 @@ def _format_results(results: dict) -> str:
     return "\n".join(lines)
 
 
-def print_results(results: dict):
-    all_slots = [s for slots in results.values() for s in slots]
-    if not all_slots:
-        log("No open slots found.")
+def send_email(results: dict):
+    app_password = os.environ.get("GMAIL_APP_PASSWORD", "")
+    if not app_password:
+        log("GMAIL_APP_PASSWORD not set — skipping email.")
         return
-    print("\n" + _format_results(results))
 
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
 
-def send_email(results: dict, subject=None):
+    gmail = "bdsarine@gmail.com"
+    body  = format_results(results)
+    all_slots = [s for slots in results.values() for s in slots]
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = f"NYC Tennis: {len(all_slots)} slot(s) open!"
+    msg["From"]    = gmail
+    msg["To"]      = gmail
+
+    msg.attach(MIMEText(body, "plain"))
+    html = f"""<html><body style="font-family:sans-serif;font-size:14px">
+    <h2 style="color:#2e7d32">🎾 NYC Tennis Availability</h2>
+    <pre style="background:#f5f5f5;padding:12px;border-radius:6px">{body}</pre>
+    </body></html>"""
+    msg.attach(MIMEText(html, "html"))
+
     try:
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        sys.path.insert(0, script_dir)
-        from email_alert import send_alert
-        all_slots = [s for slots in results.values() for s in slots]
-        send_alert(
-            subject=subject or f"NYC Tennis: {len(all_slots)} slot(s) open!",
-            body=_format_results(results)
-        )
-    except ImportError:
-        log("email_alert.py not found -- skipping email.")
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(gmail, app_password)
+            server.sendmail(gmail, gmail, msg.as_string())
+        log("Email sent.")
+    except Exception as e:
+        log(f"Email failed: {e}")
 
-
-# ── Watch mode ────────────────────────────────────────────────────────────────
-
-def _parse_hour(time_str: str):
-    m = re.search(r'(\d{1,2}):\d{2}\s*(a\.m\.|p\.m\.)', time_str, re.I)
-    if not m:
-        return None
-    hour = int(m.group(1))
-    if 'p.m.' in m.group(2).lower() and hour != 12:
-        hour += 12
-    if 'a.m.' in m.group(2).lower() and hour == 12:
-        hour = 0
-    return hour
-
-
-def _filter_watch_slots(results: dict) -> dict:
-    filtered = {}
-    for court_name, slots in results.items():
-        if not any(w.lower() in court_name.lower() for w in WATCH_COURTS):
-            continue
-        matching = []
-        for s in slots:
-            try:
-                d = datetime.strptime(s.get("date",""), "%Y-%m-%d")
-                if d.weekday() not in (5, 6):  # Sat=5, Sun=6
-                    continue
-            except Exception:
-                continue
-            hour = _parse_hour(s.get("time",""))
-            if hour is None or hour not in WATCH_HOURS:
-                continue
-            matching.append(s)
-        if matching:
-            filtered[court_name] = matching
-    return filtered
-
-
-# ── CLI ───────────────────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description="NYC Parks Tennis Court Scraper")
-    parser.add_argument("--days",   type=int, default=7, help="Days ahead to scan (default: 7).")
-    parser.add_argument("--park",   help="Filter by park name.")
-    parser.add_argument("--email",  action="store_true", help="Send email when slots found.")
-    parser.add_argument("--watch",  action="store_true",
-                        help="Check every 60s for weekend morning slots at Riverside/Sutton East.")
-    parser.add_argument("--loop",   type=int, metavar="MINUTES", help="Re-run every N minutes.")
-    parser.add_argument("--output", help="Save results to JSON file.")
-    args = parser.parse_args()
+    log("Running scheduled tennis availability check...")
 
-    def run_once():
-        results = scrape_all(days=args.days, park_filter=args.park)
-        print_results(results)
-        all_slots = [s for slots in results.values() for s in slots]
-        if args.output and all_slots:
-            with open(args.output, "w") as f:
-                json.dump(all_slots, f, indent=2)
-            log(f"Saved to {args.output}")
-        if all_slots and args.email:
-            send_email(results)
-        return all_slots
+    open_courts, closed_courts = find_all_courts()
 
-    if args.watch:
-        log("Watch mode: checking every 60s for weekend morning slots at Riverside/Sutton East ...")
-        already_alerted = set()
-        while True:
-            results = scrape_all(days=7)
-            matches = _filter_watch_slots(results)
-            if matches:
-                new_slots = []
-                for court_name, slots in matches.items():
-                    for s in slots:
-                        key = (court_name, s.get("date"), s.get("time"))
-                        if key not in already_alerted:
-                            already_alerted.add(key)
-                            new_slots.append(s)
-                if new_slots:
-                    log(f"MATCH: {len(new_slots)} new weekend morning slot(s) found!")
-                    print(_format_results(matches))
-                    if args.email:
-                        send_email(
-                            matches,
-                            subject=f"Tennis alert: {len(new_slots)} weekend morning slot(s) open!"
-                        )
-                else:
-                    log("No new matching slots.")
-            else:
-                log("No matching slots -- checking again in 60s ...")
-            time.sleep(60)
+    if closed_courts:
+        log(f"{len(closed_courts)} closed court(s): {closed_courts}")
 
-    elif args.loop:
-        log(f"Loop mode -- checking every {args.loop} min.")
-        while True:
-            found = run_once()
-            if found:
-                break
-            log(f"Sleeping {args.loop} min ...")
-            time.sleep(args.loop * 60)
+    if not open_courts:
+        log("No courts currently open.")
+        return
 
-    else:
-        run_once()
+    log(f"Checking {len(open_courts)} open court(s)...")
+    results = {}
+    for court in open_courts:
+        log(f"  {court['name']}...")
+        results[court["name"]] = scrape_court(court, days=7)
+
+    print("\n" + format_results(results))
+    send_email(results)
+    log("Done.")
 
 
 if __name__ == "__main__":

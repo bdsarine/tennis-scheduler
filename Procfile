@@ -1,1 +1,1 @@
-worker: python main.py --email
+worker: python main.py
