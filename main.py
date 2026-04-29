@@ -18,6 +18,10 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Cache-Control": "max-age=0",
 }
 
 
@@ -27,7 +31,12 @@ def log(msg: str):
 
 def fetch(url: str):
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=15)
+        session = requests.Session()
+        session.headers.update(HEADERS)
+        # First visit the main page to get cookies like a real browser
+        session.get("https://www.nycgovparks.org", timeout=15)
+        import time; time.sleep(1)
+        resp = session.get(url, timeout=15)
         resp.raise_for_status()
         return BeautifulSoup(resp.text, "html.parser")
     except Exception as e:
