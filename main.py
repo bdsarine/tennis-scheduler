@@ -29,14 +29,25 @@ def log(msg: str):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
 
+# Shared session — warmed up once at startup
+SESSION = requests.Session()
+SESSION.headers.update(HEADERS)
+
+
+def warmup():
+    """Visit the homepage once to get cookies before scraping."""
+    import time
+    try:
+        SESSION.get("https://www.nycgovparks.org", timeout=15)
+        time.sleep(1)
+        log("Session warmed up.")
+    except Exception as e:
+        log(f"Warmup failed: {e}")
+
+
 def fetch(url: str):
     try:
-        session = requests.Session()
-        session.headers.update(HEADERS)
-        # First visit the main page to get cookies like a real browser
-        session.get("https://www.nycgovparks.org", timeout=15)
-        import time; time.sleep(1)
-        resp = session.get(url, timeout=15)
+        resp = SESSION.get(url, timeout=15)
         resp.raise_for_status()
         return BeautifulSoup(resp.text, "html.parser")
     except Exception as e:
@@ -229,27 +240,48 @@ def send_email(results: dict):
         log(f"Email failed: {e}")
 
 
-def main():
+def run_check():
+    """Run one full availability check and send email."""
     log("Running scheduled tennis availability check...")
 
     open_courts, closed_courts = find_all_courts()
-
-    if closed_courts:
-        log(f"{len(closed_courts)} closed court(s): {closed_courts}")
 
     if not open_courts:
         log("No courts currently open.")
         return
 
-    log(f"Checking {len(open_courts)} open court(s)...")
     results = {}
     for court in open_courts:
-        log(f"  {court['name']}...")
         results[court["name"]] = scrape_court(court, days=7)
 
     print("\n" + format_results(results))
     send_email(results)
     log("Done.")
+
+
+def main():
+    import time as _time
+
+    log("Scheduler started -- warming up session...")
+    warmup()
+
+    last_run_hour = -1  # track which hour we last ran
+
+    while True:
+        # Railway runs in UTC. 8am ET = 12 UTC, 5pm ET = 21 UTC (EDT, UTC-4)
+        now = datetime.utcnow()
+        current_hour = now.hour
+
+        if current_hour in (12, 21) and current_hour != last_run_hour:
+            log(f"Scheduled run at UTC {current_hour}:00 ...")
+            run_check()
+            last_run_hour = current_hour
+        else:
+            # Reset last_run_hour when we move past the run hours
+            if current_hour not in (12, 21):
+                last_run_hour = -1
+
+        _time.sleep(60)  # check every minute
 
 
 if __name__ == "__main__":
