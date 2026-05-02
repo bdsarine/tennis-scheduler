@@ -159,38 +159,28 @@ def format_results(results: dict) -> str:
 
 
 def send_email(results: dict):
-    app_password = os.environ.get("GMAIL_APP_PASSWORD", "")
-    if not app_password:
-        log("GMAIL_APP_PASSWORD not set — skipping email.")
+    api_key = os.environ.get("SENDGRID_API_KEY", "")
+    if not api_key:
+        log("SENDGRID_API_KEY not set -- skipping email.")
         return
-
-    import smtplib
-    from email.mime.text import MIMEText
-    from email.mime.multipart import MIMEMultipart
-
-    gmail = "bdsarine@gmail.com"
-    body  = format_results(results)
+    import urllib.request, json as _json
+    body = format_results(results)
     all_slots = [s for slots in results.values() for s in slots]
-
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"NYC Tennis: {len(all_slots)} slot(s) open!"
-    msg["From"]    = gmail
-    msg["To"]      = gmail
-
-    msg.attach(MIMEText(body, "plain"))
-    html = f"""<html><body style="font-family:sans-serif;font-size:14px">
-    <h2 style="color:#2e7d32">🎾 NYC Tennis Availability</h2>
-    <pre style="background:#f5f5f5;padding:12px;border-radius:6px">{body}</pre>
-    </body></html>"""
-    msg.attach(MIMEText(html, "html"))
-
+    payload = _json.dumps({
+        "personalizations": [{"to": [{"email": "bdsarine@gmail.com"}]}],
+        "from": {"email": "bdsarine@gmail.com", "name": "Tennis Scheduler"},
+        "subject": f"NYC Tennis: {len(all_slots)} slot(s) open!",
+        "content": [{"type": "text/plain", "value": body}]
+    }).encode()
+    req = urllib.request.Request(
+        "https://api.sendgrid.com/v3/mail/send",
+        data=payload,
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        method="POST"
+    )
     try:
-        with smtplib.SMTP("smtp.gmail.com", 587) as server:
-            server.ehlo()
-            server.starttls()
-            server.login(gmail, app_password)
-            server.sendmail(gmail, gmail, msg.as_string())
-        log("Email sent.")
+        urllib.request.urlopen(req, timeout=15)
+        log("Email sent via SendGrid.")
     except Exception as e:
         log(f"Email failed: {e}")
 
