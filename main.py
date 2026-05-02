@@ -124,6 +124,49 @@ def scrape_court(court: dict, days: int) -> list:
     return slots
 
 
+
+def _group_time_ranges(times: list) -> list:
+    """Group consecutive hours into ranges e.g. ['8am','9am','10am'] -> ['8am-10am']"""
+    if not times:
+        return []
+
+    def to_hour(t):
+        import re as _re
+        m = _re.search(r'(\d{1,2})(am|pm)', t, _re.I)
+        if not m:
+            return None
+        h = int(m.group(1))
+        if 'pm' in m.group(2).lower() and h != 12:
+            h += 12
+        if 'am' in m.group(2).lower() and h == 12:
+            h = 0
+        return h
+
+    def fmt(h):
+        if h == 0: return "12am"
+        if h < 12: return f"{h}am"
+        if h == 12: return "12pm"
+        return f"{h-12}pm"
+
+    hours = [to_hour(t) for t in times]
+    hours = [h for h in hours if h is not None]
+    hours.sort()
+
+    ranges = []
+    if not hours:
+        return times
+
+    start = hours[0]
+    end   = hours[0]
+    for h in hours[1:]:
+        if h == end + 1:
+            end = h
+        else:
+            ranges.append(fmt(start) if start == end else f"{fmt(start)}-{fmt(end)}")
+            start = end = h
+    ranges.append(fmt(start) if start == end else f"{fmt(start)}-{fmt(end)}")
+    return ranges
+
 def format_results(results: dict) -> str:
     all_slots = [s for slots in results.values() for s in slots]
     if not all_slots:
@@ -152,7 +195,8 @@ def format_results(results: dict) -> str:
                         s.get("time", "?").replace(":00 ", "").replace("a.m.", "am").replace("p.m.", "pm")
                     )
                 for court_num, times in sorted(by_court.items()):
-                    lines.append(f"    {court_num}:  {',  '.join(times)}")
+                    ranges = _group_time_ranges(times)
+                    lines.append(f"    {court_num}:  {',  '.join(ranges)}")
         lines.append("")
 
     return "\n".join(lines)
