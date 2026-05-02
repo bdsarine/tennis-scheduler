@@ -170,7 +170,7 @@ def send_email(results: dict):
         "personalizations": [{"to": [{"email": "bdsarine@gmail.com"}]}],
         "from": {"email": "bdsarine@gmail.com", "name": "Tennis Scheduler"},
         "subject": f"NYC Tennis: {len(all_slots)} slot(s) open!",
-        "content": [{"type": "text/plain", "value": body}]
+        "content": [{"type": "text/plain", "value": body + "\n\nBook now: https://www.nycgovparks.org/tennisreservation"}]
     }).encode()
     req = urllib.request.Request(
         "https://api.sendgrid.com/v3/mail/send",
