@@ -261,15 +261,23 @@ def run_check():
 
 def main():
     import time as _time
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--now", action="store_true", help="Run immediately and exit.")
+    args = parser.parse_args()
 
     log("Scheduler started -- warming up session...")
     warmup()
+
+    if args.now:
+        run_check()
+        return
 
     last_run_hour = -1  # track which hour we last ran
 
     while True:
         # Railway runs in UTC. 8am ET = 12 UTC, 5pm ET = 21 UTC (EDT, UTC-4)
-        now = datetime.utcnow()
+        now = datetime.now(tz=__import__("datetime").timezone.utc)
         current_hour = now.hour
 
         if current_hour in (12, 21) and current_hour != last_run_hour:
@@ -277,7 +285,6 @@ def main():
             run_check()
             last_run_hour = current_hour
         else:
-            # Reset last_run_hour when we move past the run hours
             if current_hour not in (12, 21):
                 last_run_hour = -1
 
